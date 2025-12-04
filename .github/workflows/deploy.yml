@@ -38,12 +38,12 @@ jobs:
       - name: Create EB application version
         run: |
           aws elasticbeanstalk create-application-version \
-            --application-name "agentic-frontend-app" \
+            --application-name "demo-mywealth-ui" \
             --version-label "$VERSION" \
             --source-bundle S3Bucket="elasticbeanstalk-ca-central-1-682740202133",S3Key="$S3_KEY"
 
       - name: Deploy to EB environment
         run: |
           aws elasticbeanstalk update-environment \
-            --environment-name "Agentic-frontend-app-env" \
+            --environment-name "Demo-mywealth-ui-env" \
             --version-label "$VERSION"
