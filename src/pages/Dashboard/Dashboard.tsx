@@ -11,10 +11,26 @@ import {
 import { GET_AGREEMENTS, GET_DASHBOARD_STATS } from '@graphql/queries';
 import { useAppContext } from '@contexts/AppContext';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
+import { useAgreementActions } from '../../hooks/useAgreementActions';
 import { COLORS, DEFAULT_PAGE_SIZE } from '../../constants';
 import AgreementTable from './components/AgreementTable';
 import AgreementFilters from './components/AgreementFilters';
-import { AgreementStatus } from '../../types';
+import ConfirmationModal from '../../components/ConfirmationModal';
+import ToastNotification from '../../components/ToastNotification';
+import { AgreementStatus, Agreement } from '../../types';
+
+interface ConfirmationState {
+  open: boolean;
+  agreementId: string | null;
+  action: 'approve' | 'decline' | null;
+  agreementNumber?: string;
+}
+
+interface ToastState {
+  open: boolean;
+  message: string;
+  severity: 'success' | 'error' | 'warning' | 'info';
+}
 
 const Dashboard: React.FC = () => {
   const nav = useAppNavigation();
@@ -22,6 +38,25 @@ const Dashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState(0);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const { approveAgreement, declineAgreement, loading: actionLoading } = useAgreementActions();
+
+  // State for confirmation modal
+  const [confirmationState, setConfirmationState] = useState<ConfirmationState>({
+    open: false,
+    agreementId: null,
+    action: null,
+  });
+
+  // State for toast notifications
+  const [toastState, setToastState] = useState<ToastState>({
+    open: false,
+    message: '',
+    severity: 'success',
+  });
+
+  // Local state for optimistic UI updates
+  const [localAgreements, setLocalAgreements] = useState<Agreement[]>([]);
+  const [localStats, setLocalStats] = useState<any>(null);
 
   const { data: statsData, loading: statsLoading } = useQuery(GET_DASHBOARD_STATS, {
     fetchPolicy: 'network-only',
@@ -35,6 +70,7 @@ const Dashboard: React.FC = () => {
       const mockStats = getMockDashboardStats();
       if (mockStats) {
         setRawStatsData(mockStats);
+        setLocalStats(mockStats);
       }
     });
   }, [statsLoading]);
@@ -66,6 +102,7 @@ const Dashboard: React.FC = () => {
       if (mockData) {
         console.log('✅ Got raw mock data from store:', mockData);
         setRawAgreementsData(mockData);
+        setLocalAgreements(mockData.data || []);
       }
     });
   }, [agreementsLoading, agreementsData]); // Re-fetch when query completes or data changes
@@ -81,11 +118,11 @@ const Dashboard: React.FC = () => {
     
     // Apply status filter based on tab
     const statusFilters: { [key: number]: AgreementStatus[] | undefined } = {
-      0: undefined, // All
+      0: [AgreementStatus.PENDING_APPROVAL], // Changed: Pending first
       1: [AgreementStatus.ACTIVE],
-      2: [AgreementStatus.PENDING_APPROVAL],
-      3: [AgreementStatus.DRAFT],
-      4: [AgreementStatus.EXPIRED, AgreementStatus.TERMINATED],
+      2: [AgreementStatus.DRAFT],
+      3: [AgreementStatus.EXPIRED, AgreementStatus.TERMINATED],
+      4: undefined, // All
     };
     
     setFilters({ ...filters, status: statusFilters[newValue] });
@@ -99,8 +136,105 @@ const Dashboard: React.FC = () => {
     nav.goToAgreementDetails(agreementId);
   };
 
-  // Use raw mock data if available, otherwise fall back to Apollo data
-  const agreements = rawAgreementsData?.data || agreementsData?.agreements?.data || [];
+  // Handle approve action
+  const handleApprove = (agreementId: string) => {
+    const agreement = localAgreements.find((a) => a.id === agreementId);
+    setConfirmationState({
+      open: true,
+      agreementId,
+      action: 'approve',
+      agreementNumber: agreement?.agreementNumber,
+    });
+  };
+
+  // Handle decline action
+  const handleDecline = (agreementId: string) => {
+    const agreement = localAgreements.find((a) => a.id === agreementId);
+    setConfirmationState({
+      open: true,
+      agreementId,
+      action: 'decline',
+      agreementNumber: agreement?.agreementNumber,
+    });
+  };
+
+  // Confirm action
+  const handleConfirmAction = async () => {
+    if (!confirmationState.agreementId || !confirmationState.action) return;
+
+    const agreementId = confirmationState.agreementId;
+    const action = confirmationState.action;
+
+    // Close confirmation modal
+    setConfirmationState({ open: false, agreementId: null, action: null });
+
+    try {
+      if (action === 'approve') {
+        await approveAgreement(agreementId);
+        // Optimistically update local state
+        setLocalAgreements((prev) => prev.filter((a) => a.id !== agreementId));
+        setLocalStats((prev: any) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            pendingApprovalAgreements: Math.max(0, (prev.pendingApprovalAgreements || 0) - 1),
+            activeAgreements: (prev.activeAgreements || 0) + 1,
+          };
+        });
+        setToastState({
+          open: true,
+          message: `Agreement ${confirmationState.agreementNumber} approved successfully!`,
+          severity: 'success',
+        });
+      } else if (action === 'decline') {
+        await declineAgreement(agreementId);
+        // Optimistically update local state
+        setLocalAgreements((prev) => prev.filter((a) => a.id !== agreementId));
+        setLocalStats((prev: any) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            pendingApprovalAgreements: Math.max(0, (prev.pendingApprovalAgreements || 0) - 1),
+            expiredAgreements: (prev.expiredAgreements || 0) + 1,
+          };
+        });
+        setToastState({
+          open: true,
+          message: `Agreement ${confirmationState.agreementNumber} declined successfully.`,
+          severity: 'success',
+        });
+      }
+      
+      // Refetch to sync with backend
+      setTimeout(() => {
+        refetch();
+      }, 500);
+    } catch (error) {
+      console.error('Error processing agreement action:', error);
+      setToastState({
+        open: true,
+        message: `Failed to ${action} agreement. Please try again.`,
+        severity: 'error',
+      });
+      // Revert optimistic update by refetching
+      refetch();
+    }
+  };
+
+  // Cancel action
+  const handleCancelAction = () => {
+    setConfirmationState({ open: false, agreementId: null, action: null });
+  };
+
+  // Close toast
+  const handleCloseToast = () => {
+    setToastState({ ...toastState, open: false });
+  };
+
+  // Use local state for optimistic updates, otherwise fall back to raw/Apollo data
+  const agreements = localAgreements.length > 0 
+    ? localAgreements 
+    : (rawAgreementsData?.data || agreementsData?.agreements?.data || []);
   const total = rawAgreementsData?.total || agreementsData?.agreements?.total || 0;
 
   interface TabCounts {
@@ -112,7 +246,7 @@ const Dashboard: React.FC = () => {
   }
 
   const getTabCounts = (): TabCounts => {
-    const stats = rawStatsData || statsData?.dashboardStats;
+    const stats = localStats || rawStatsData || statsData?.dashboardStats;
     if (!stats) {
       return { all: 0, active: 0, pending: 0, draft: 0, deleted: 0 };
     }
@@ -127,6 +261,15 @@ const Dashboard: React.FC = () => {
   };
 
   const tabCounts = getTabCounts();
+
+  const getConfirmationMessage = () => {
+    if (confirmationState.action === 'approve') {
+      return `Are you sure you want to approve agreement ${confirmationState.agreementNumber}? This will change its status to ACTIVE.`;
+    } else if (confirmationState.action === 'decline') {
+      return `Are you sure you want to decline agreement ${confirmationState.agreementNumber}? This will change its status to EXPIRED.`;
+    }
+    return '';
+  };
 
   return (
     <Box sx={{ bgcolor: COLORS.BACKGROUND_GRAY, minHeight: '100vh', p: 3 }}>
@@ -188,16 +331,38 @@ const Dashboard: React.FC = () => {
         <Box sx={{ p: 0 }}>
           <AgreementTable
             agreements={agreements}
-            loading={agreementsLoading}
+            loading={agreementsLoading || actionLoading}
             total={total}
             page={page}
             pageSize={pageSize}
             onPageChange={setPage}
             onPageSizeChange={setPageSize}
             onRowClick={handleRowClick}
+            onApprove={handleApprove}
+            onDecline={handleDecline}
           />
         </Box>
       </Card>
+
+      {/* Confirmation Modal */}
+      <ConfirmationModal
+        open={confirmationState.open}
+        title={confirmationState.action === 'approve' ? 'Approve Agreement' : 'Decline Agreement'}
+        message={getConfirmationMessage()}
+        confirmText={confirmationState.action === 'approve' ? 'Approve' : 'Decline'}
+        cancelText="Cancel"
+        onConfirm={handleConfirmAction}
+        onCancel={handleCancelAction}
+        confirmColor={confirmationState.action === 'approve' ? 'success' : 'error'}
+      />
+
+      {/* Toast Notification */}
+      <ToastNotification
+        open={toastState.open}
+        message={toastState.message}
+        severity={toastState.severity}
+        onClose={handleCloseToast}
+      />
     </Box>
   );
 };

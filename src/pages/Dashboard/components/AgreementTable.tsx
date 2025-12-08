@@ -12,10 +12,10 @@ import {
   Typography,
   Box,
   CircularProgress,
-  Button,
 } from '@mui/material';
 import { Agreement, AgreementStatus } from '../../../types';
 import { format } from 'date-fns';
+import AgreementActionMenu from '../../../components/AgreementActionMenu';
 
 interface AgreementTableProps {
   agreements: Agreement[];
@@ -26,6 +26,8 @@ interface AgreementTableProps {
   onPageChange: (page: number) => void;
   onPageSizeChange: (pageSize: number) => void;
   onRowClick: (agreementId: string) => void;
+  onApprove: (agreementId: string) => void;
+  onDecline: (agreementId: string) => void;
 }
 
 const AgreementTable: React.FC<AgreementTableProps> = ({
@@ -37,6 +39,8 @@ const AgreementTable: React.FC<AgreementTableProps> = ({
   onPageChange,
   onPageSizeChange,
   onRowClick,
+  onApprove,
+  onDecline,
 }) => {
   const getStatusColor = (status: AgreementStatus): 'default' | 'primary' | 'secondary' | 'error' | 'info' | 'success' | 'warning' => {
     const statusColors: Record<AgreementStatus, 'default' | 'primary' | 'secondary' | 'error' | 'info' | 'success' | 'warning'> = {
@@ -144,10 +148,16 @@ const AgreementTable: React.FC<AgreementTableProps> = ({
                 <TableCell sx={{ fontSize: '0.875rem' }}>{agreement.createdBy || 'N/A'}</TableCell>
                 <TableCell sx={{ fontSize: '0.875rem' }}>{agreement.modifiedBy || 'N/A'}</TableCell>
                 <TableCell sx={{ fontSize: '0.875rem' }}>{agreement.clientName || 'N/A'}</TableCell>
-                <TableCell>
-                  <Button size="small" sx={{ textTransform: 'none', minWidth: 'auto', p: 0.5 }}>
-                    •••
-                  </Button>
+                <TableCell onClick={(e) => e.stopPropagation()}>
+                  {agreement.status === AgreementStatus.PENDING_APPROVAL ? (
+                    <AgreementActionMenu
+                      agreementId={agreement.id}
+                      onApprove={onApprove}
+                      onDecline={onDecline}
+                    />
+                  ) : (
+                    <Box sx={{ width: 40 }} />
+                  )}
                 </TableCell>
               </TableRow>
             ))}
